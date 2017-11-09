@@ -6,5 +6,7 @@ go:
 
 go_import_path: github.com/Percona-Lab/prom-migrate
 
+install: true
+
 script:
   - go install -v
