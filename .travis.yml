@@ -1,0 +1,12 @@
+sudo: false
+language: go
+
+go:
+  - 1.9.x
+
+go_import_path: github.com/Percona-Lab/prom-migrate
+
+install: true
+
+script:
+  - go install -v
