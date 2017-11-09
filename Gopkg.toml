@@ -1,0 +1,5 @@
+[[constraint]]
+  # use exactly the same commit as Prometheus 2.0
+  # https://github.com/prometheus/prometheus/blob/v2.0.0/vendor/vendor.json#L781
+  name = "github.com/prometheus/tsdb"
+  revision = "706602daed1487f7849990678b4ece4599745905"
