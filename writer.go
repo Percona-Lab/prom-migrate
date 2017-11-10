@@ -26,10 +26,12 @@ import (
 
 type Writer struct {
 	db *tsdb.DB
+	l  log.Logger
 }
 
 func NewWriter(dir string) (*Writer, error) {
-	db, err := tsdb.Open(dir, log.With(log.NewLogfmtLogger(os.Stderr), "component", "tsdb"), nil, nil)
+	l := log.With(log.NewLogfmtLogger(os.Stderr), "component", "tsdb")
+	db, err := tsdb.Open(dir, l, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +39,7 @@ func NewWriter(dir string) (*Writer, error) {
 	// TODO options, logger, compression, etc.
 	// db.EnableCompactions()
 
-	return &Writer{db: db}, nil
+	return &Writer{db: db, l: l}, nil
 }
 
 func (w *Writer) Close() error {
@@ -59,17 +61,25 @@ func (w *Writer) Write(data []*remote.TimeSeries) error {
 			l[i] = labels.Label{Name: p.Name, Value: p.Value}
 		}
 
+		var ref uint64
+		var err error
 		for _, s := range ts.Samples {
-			_, err := a.Add(l, s.TimestampMs, s.Value)
-			if err != nil {
+			// use ref if available
+			if ref != 0 {
+				if err = a.AddFast(ref, s.TimestampMs, s.Value); err == nil {
+					continue
+				}
+				w.l.Log("msg", "AddFast returned error", "error", err)
+			}
+
+			// slow path if ref is not available or AddFast returned error
+			if ref, err = a.Add(l, s.TimestampMs, s.Value); err != nil {
 				return err
 			}
-			// TODO use AddFast
 		}
 	}
 
-	err := a.Commit()
-	if err != nil {
+	if err := a.Commit(); err != nil {
 		return err
 	}
 	committed = true
