@@ -19,14 +19,18 @@ import (
 	"log"
 	"net/url"
 	"time"
+
+	"github.com/Percona-Lab/prom-migrate/remote"
 )
 
 func main() {
-	log.SetFlags(0)
+	log.SetFlags(log.Lmicroseconds)
+	log.SetPrefix("main ")
 	readF := flag.String("read", "http://127.0.0.1:9090/api/v1/read", "Prometheus 1.8 read API endpoint")
-	writeF := flag.String("write", "data", "Prometheus 2.0 data directory (must be empty or not exist)")
+	writeF := flag.String("write", "data", "Prometheus 2.0 new data directory")
 	checkF := flag.Bool("check", false, "Runs extra checks during migration")
-	startF := flag.Duration("start", 14*24*time.Hour, "")
+	lastF := flag.Duration("last", 24*time.Hour, "Migration starting point")
+	step := time.Minute
 	flag.Parse()
 
 	readURL, err := url.Parse(*readF)
@@ -44,25 +48,47 @@ func main() {
 	}
 	defer func() {
 		writer.Close()
-		log.Print("writer closed")
+		log.Print("Done!")
 	}()
 
-	start := time.Now().Add(-*startF)
-	step := time.Minute
-	for {
-		end := start.Add(step)
-		data, err := reader.Read(start, end)
-		if err != nil {
-			log.Fatalf("%+v", err)
-		}
+	begin := time.Now().Add(-*lastF).Truncate(time.Minute)
+	start := begin
+	t := time.Tick(10 * time.Second)
+	log.Printf("Migrating data since %s... ", begin)
 
-		err = writer.Write(data)
+	ch := make(chan []*remote.TimeSeries, 100)
+
+	// start reader
+	go func() {
+		defer close(ch)
+
+		for {
+			end := start.Add(step)
+			data, err := reader.Read(start, end)
+			if err != nil {
+				log.Fatalf("%+v", err)
+			}
+			ch <- data
+
+			if start.After(time.Now()) {
+				break
+			}
+			start = end
+
+			select {
+			case <-t:
+				log.Printf("%s / %s (%.2f%%); writes queued %d/%d", start.Sub(begin), time.Since(begin),
+					float64(start.Sub(begin))/float64(time.Since(begin))*100, len(ch), cap(ch))
+			default:
+			}
+		}
+	}()
+
+	// start writer
+	for data := range ch {
+		err := writer.Write(data)
 		if err != nil {
 			log.Fatalf("%+v", err)
 		}
-		if start.After(time.Now()) {
-			break
-		}
-		start = end
 	}
 }
