@@ -20,6 +20,8 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/prometheus/common/model"
+
 	"github.com/Percona-Lab/prom-migrate/remote"
 )
 
@@ -29,7 +31,10 @@ func main() {
 	readF := flag.String("read", "http://127.0.0.1:9090/api/v1/read", "Prometheus 1.8 read API endpoint")
 	writeF := flag.String("write", "data", "Prometheus 2.0 new data directory")
 	checkF := flag.Bool("check", false, "Runs extra checks during migration")
-	lastF := flag.Duration("last", 24*time.Hour, "Migration starting point")
+	lastF := model.Duration(15 * 24 * time.Hour)
+	flag.Var(&lastF, "last", "Migration starting point")
+	retentionF := model.Duration(15 * 24 * time.Hour)
+	flag.Var(&retentionF, "tsdb-retention", "TSDB: how long to retain samples in the storage")
 	step := time.Minute
 	flag.Parse()
 
@@ -42,7 +47,7 @@ func main() {
 		URL:   *readURL,
 		Check: *checkF,
 	}
-	writer, err := NewWriter(*writeF)
+	writer, err := NewWriter(*writeF, time.Duration(retentionF))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -51,7 +56,7 @@ func main() {
 		log.Print("Done!")
 	}()
 
-	begin := time.Now().Add(-*lastF).Truncate(time.Minute)
+	begin := time.Now().Add(-time.Duration(lastF)).Truncate(time.Minute)
 	start := begin
 	t := time.Tick(10 * time.Second)
 	log.Printf("Migrating data since %s... ", begin)
@@ -77,7 +82,7 @@ func main() {
 
 			select {
 			case <-t:
-				log.Printf("%s / %s (%.2f%%); writes queued %d/%d", start.Sub(begin), time.Since(begin),
+				log.Printf("%s / %s (%.2f%%); writes queued %d/%d", start.Sub(begin), time.Since(begin).Truncate(time.Minute),
 					float64(start.Sub(begin))/float64(time.Since(begin))*100, len(ch), cap(ch))
 			default:
 			}

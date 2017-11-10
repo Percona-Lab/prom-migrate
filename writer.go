@@ -16,6 +16,7 @@ package main
 
 import (
 	"os"
+	"time"
 
 	"github.com/go-kit/kit/log"
 	"github.com/prometheus/tsdb"
@@ -29,16 +30,16 @@ type Writer struct {
 	l  log.Logger
 }
 
-func NewWriter(dir string) (*Writer, error) {
+func NewWriter(dir string, retention time.Duration) (*Writer, error) {
 	l := log.With(log.NewLogfmtLogger(os.Stderr), "component", "tsdb")
-	db, err := tsdb.Open(dir, l, nil, nil)
+	db, err := tsdb.Open(dir, l, nil, &tsdb.Options{
+		WALFlushInterval:  10 * time.Second, // the same as Prometheus 2.0
+		RetentionDuration: uint64(retention / time.Millisecond),
+		BlockRanges:       tsdb.ExponentialBlockRanges(int64(2*time.Hour)/1e6, 3, 5),
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	// TODO options, logger, compression, etc.
-	// db.EnableCompactions()
-
 	return &Writer{db: db, l: l}, nil
 }
 
