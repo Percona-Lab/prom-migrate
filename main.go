@@ -43,10 +43,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	reader := &Reader{
-		URL:   *readURL,
-		Check: *checkF,
-	}
+	reader := NewReader(*readURL, *checkF)
 	writer, err := NewWriter(*writeF, time.Duration(retentionF))
 	if err != nil {
 		log.Fatal(err)
@@ -91,8 +88,11 @@ func main() {
 
 	// start writer
 	for data := range ch {
-		err := writer.Write(data)
-		if err != nil {
+		if len(data) == 0 {
+			continue
+		}
+
+		if err := writer.Write(data); err != nil {
 			log.Fatalf("%+v", err)
 		}
 	}

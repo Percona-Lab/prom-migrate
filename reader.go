@@ -32,16 +32,23 @@ import (
 )
 
 type Reader struct {
-	URL    url.URL
-	Check  bool
-	Client *http.Client
+	url    url.URL
+	check  bool
+	client *http.Client
 }
 
-func (r *Reader) http() *http.Client {
-	if r.Client == nil {
-		return http.DefaultClient
+func NewReader(url url.URL, check bool) *Reader {
+	return &Reader{
+		url:   url,
+		check: check,
+		client: &http.Client{
+			Transport: &http.Transport{
+				MaxIdleConns:        10,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     time.Minute,
+			},
+		},
 	}
-	return r.Client
 }
 
 func sortLabels(labels []*remote.LabelPair) func(i, j int) bool {
@@ -71,13 +78,13 @@ func (r *Reader) Read(start, end time.Time) ([]*remote.TimeSeries, error) {
 	}
 	b = snappy.Encode(nil, b)
 
-	req, err := http.NewRequest("POST", r.URL.String(), bytes.NewReader(b))
+	req, err := http.NewRequest("POST", r.url.String(), bytes.NewReader(b))
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Content-Encoding", "snappy")
-	resp, err := r.http().Do(req)
+	resp, err := r.client.Do(req)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -109,7 +116,7 @@ func (r *Reader) Read(start, end time.Time) ([]*remote.TimeSeries, error) {
 		sort.Slice(ts.Labels, sortLabels(ts.Labels))
 	}
 
-	if r.Check {
+	if r.check {
 		for _, ts := range timeseries {
 			if !sort.SliceIsSorted(ts.Labels, sortLabels(ts.Labels)) {
 				return nil, errors.New("labels are not sorted")
