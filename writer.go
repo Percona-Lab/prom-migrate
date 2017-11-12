@@ -25,6 +25,7 @@ import (
 	"github.com/Percona-Lab/prom-migrate/remote"
 )
 
+// Writer writes data to new Prometheus 2.0 tsdb database.
 type Writer struct {
 	db *tsdb.DB
 	l  log.Logger

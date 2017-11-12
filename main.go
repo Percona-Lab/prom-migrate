@@ -15,9 +15,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net/url"
+	"os"
+	"os/signal"
+	"runtime/pprof"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/common/model"
@@ -31,11 +36,11 @@ func main() {
 	readF := flag.String("read", "http://127.0.0.1:9090/api/v1/read", "Prometheus 1.8 read API endpoint")
 	writeF := flag.String("write", "data", "Prometheus 2.0 new data directory")
 	checkF := flag.Bool("check", false, "Runs extra checks during migration")
+	cpuprofileF := flag.String("cpuprofile", "", "Write cpu profile `file`")
 	lastF := model.Duration(15 * 24 * time.Hour)
 	flag.Var(&lastF, "last", "Migration starting point")
 	retentionF := model.Duration(15 * 24 * time.Hour)
 	flag.Var(&retentionF, "tsdb-retention", "TSDB: how long to retain samples in the storage")
-	step := time.Minute
 	flag.Parse()
 
 	readURL, err := url.Parse(*readF)
@@ -48,24 +53,72 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	startedAt := time.Now()
+	begin := time.Now().Add(-time.Duration(lastF)).Truncate(time.Minute)
+	var end time.Time
+	log.Printf("Migrating data since %s... ", begin)
+
 	defer func() {
-		writer.Close()
-		log.Print("Done!")
+		if err := writer.Close(); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("Done! Migrated %s of data (%s - %s) in %s.", end.Sub(begin), begin, end, time.Since(startedAt))
 	}()
 
-	begin := time.Now().Add(-time.Duration(lastF)).Truncate(time.Minute)
-	start := begin
-	t := time.Tick(10 * time.Second)
-	log.Printf("Migrating data since %s... ", begin)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	signalsCh := make(chan os.Signal, 1)
+	go func() {
+		s := <-signalsCh
+		log.Printf("Received %s, exiting.", s)
+		signal.Stop(signalsCh)
+		cancel()
+	}()
+	signal.Notify(signalsCh, syscall.SIGINT, syscall.SIGTERM)
+
+	if *cpuprofileF != "" {
+		f, err := os.Create(*cpuprofileF)
+		if err != nil {
+			log.Fatalf("Could not create CPU profile: %s", err)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatalf("Could not start CPU profile: %s", err)
+		}
+		defer func() {
+			pprof.StopCPUProfile()
+			f.Close()
+		}()
+	}
 
 	ch := make(chan []*remote.TimeSeries, 100)
 
 	// start reader
 	go func() {
-		defer close(ch)
+		start := begin
+		logProgress := func() {
+			log.Printf("%s / %s (%.2f%%); writes queued %d/%d", start.Sub(begin), time.Since(begin).Truncate(time.Minute),
+				float64(start.Sub(begin))/float64(time.Since(begin))*100, len(ch), cap(ch))
+		}
 
+		defer func() {
+			logProgress()
+			close(ch)
+		}()
+
+		const step = time.Minute
+		t := time.Tick(10 * time.Second)
 		for {
-			end := start.Add(step)
+			select {
+			case <-t:
+				logProgress()
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			end = start.Add(step)
 			data, err := reader.Read(start, end)
 			if err != nil {
 				log.Fatalf("%+v", err)
@@ -73,16 +126,9 @@ func main() {
 			ch <- data
 
 			if start.After(time.Now()) {
-				break
+				return
 			}
 			start = end
-
-			select {
-			case <-t:
-				log.Printf("%s / %s (%.2f%%); writes queued %d/%d", start.Sub(begin), time.Since(begin).Truncate(time.Minute),
-					float64(start.Sub(begin))/float64(time.Since(begin))*100, len(ch), cap(ch))
-			default:
-			}
 		}
 	}()
 

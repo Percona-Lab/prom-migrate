@@ -31,16 +31,17 @@ import (
 	"github.com/Percona-Lab/prom-migrate/remote"
 )
 
+// Reader reads data from Prometheus 1.8 via API.
 type Reader struct {
-	url    url.URL
-	check  bool
-	client *http.Client
+	url         url.URL
+	extraChecks bool
+	client      *http.Client
 }
 
-func NewReader(url url.URL, check bool) *Reader {
+func NewReader(url url.URL, extraChecks bool) *Reader {
 	return &Reader{
-		url:   url,
-		check: check,
+		url:         url,
+		extraChecks: extraChecks,
 		client: &http.Client{
 			Transport: &http.Transport{
 				MaxIdleConns:        10,
@@ -51,7 +52,7 @@ func NewReader(url url.URL, check bool) *Reader {
 	}
 }
 
-func sortLabels(labels []*remote.LabelPair) func(i, j int) bool {
+func compareLabelPairs(labels []*remote.LabelPair) func(i, j int) bool {
 	return func(i, j int) bool {
 		if labels[i].Name != labels[j].Name {
 			return labels[i].Name < labels[j].Name
@@ -113,12 +114,12 @@ func (r *Reader) Read(start, end time.Time) ([]*remote.TimeSeries, error) {
 	timeseries := response.Results[0].Timeseries
 
 	for _, ts := range timeseries {
-		sort.Slice(ts.Labels, sortLabels(ts.Labels))
+		sort.Slice(ts.Labels, compareLabelPairs(ts.Labels))
 	}
 
-	if r.check {
+	if r.extraChecks {
 		for _, ts := range timeseries {
-			if !sort.SliceIsSorted(ts.Labels, sortLabels(ts.Labels)) {
+			if !sort.SliceIsSorted(ts.Labels, compareLabelPairs(ts.Labels)) {
 				return nil, errors.New("labels are not sorted")
 			}
 
